@@ -1,0 +1,29 @@
+{
+  "name": "vault-curator",
+  "version": "1.0.0",
+  "description": "VaultCurator:DeepSeek 驱动的 Obsidian 知识库管家",
+  "main": "main.js",
+  "scripts": {
+    "dev": "rollup -c -w",
+    "build": "tsc -noEmit -skipLibCheck && rollup -c"
+  },
+  "keywords": [
+    "obsidian",
+    "deepseek"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "builtin-modules": "^3.3.0",
+    "obsidian": "latest",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3",
+    "rollup": "^4.9.0",
+    "@rollup/plugin-node-resolve": "^15.2.0",
+    "@rollup/plugin-typescript": "^11.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HaibaraTaffy/vault-curator.git"
+  }
+}
