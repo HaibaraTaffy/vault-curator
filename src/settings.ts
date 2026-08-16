@@ -9,15 +9,17 @@ export const DEFAULT_SETTINGS: DSVKSettings = {
   model: "deepseek-v4-flash",
   temperature: 0.3,
   maxTokens: 4096,
-  rulesPaths: ["AI-入口.md", "README.md", "知识库/_模板/主题页模板.md"],
+  rulesPaths: [],
   autoMode: false,
   scanIncludeMynote: true,
   scanIncludeInternet: true,
   scanIncludeKnowledge: true,
   writeChangelog: true,
   lastScanTime: 0,
-  permissionMode: "auto",
+  permissionMode: "proposal",
   chatHistory: 40,
+  writeScope: "whole-vault",
+  allowedWriteRoots: [],
   totalPromptTokens: 0,
   totalCompletionTokens: 0,
 };
@@ -78,7 +80,7 @@ export class DSVKSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("权限模式")
       .setDesc(
-        "auto=AI 自动执行(默认,仍受硬安全约束:不碰 .git/.obsidian/.claudian,不执行 git/shell);proposal=写操作逐条确认;normal=只读问答。写操作能力在 M3b 加入,当前阶段仅只读工具。"
+        "auto=AI 自动执行(仍受硬安全约束:不碰 .git/.obsidian/.claudian,不执行 git/shell);proposal=写操作逐条确认(推荐);normal=只读问答。"
       )
       .addDropdown((dd) =>
         dd
@@ -135,8 +137,35 @@ export class DSVKSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("写入范围")
+      .setDesc("whole-vault=允许 AI 写整个仓库(排除 .git/.obsidian/.claudian/.trash);roots-only=仅允许下方列出的目录。")
+      .addDropdown((dd) =>
+        dd
+          .addOption("whole-vault", "whole-vault(整个仓库)")
+          .addOption("roots-only", "roots-only(仅指定目录)")
+          .setValue(this.plugin.settings.writeScope)
+          .onChange(async (v) => {
+            this.plugin.settings.writeScope = v as DSVKSettings["writeScope"];
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("允许写入的目录(roots-only 模式)")
+      .setDesc("每行一个目录前缀,如 知识库/ 或 mynote/。留空且为 whole-vault 时表示整个仓库。")
+      .addTextArea((ta) =>
+        ta
+          .setPlaceholder("知识库/\nmynote/")
+          .setValue(this.plugin.settings.allowedWriteRoots.join("\n"))
+          .onChange(async (v) => {
+            this.plugin.settings.allowedWriteRoots = v.split("\n").map((s) => s.trim()).filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("规则文档(系统提示词来源)")
-      .setDesc("每行一个 vault 内 md 路径,回车分隔。改这些文档即改管家行为。")
+      .setDesc("每行一个 vault 内 md 路径,回车分隔。留空则无额外规则,行为完全由对话指示决定。改这些文档即改 AI 行为。")
       .addTextArea((ta) =>
         ta
           .setPlaceholder("AI-入口.md")

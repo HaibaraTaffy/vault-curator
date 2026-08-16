@@ -56,7 +56,7 @@ export async function buildOrganizeInput(
 
   const topicIndex: string[] = [];
   for (const f of app.vault.getFiles()) {
-    if (f.extension === "md" && f.path.startsWith("知识库/") && f.name === "README.md") {
+    if (f.extension === "md" && f.name === "README.md") {
       let c = "";
       try { c = (await app.vault.cachedRead(f)).slice(0, 2000); } catch { continue; }
       topicIndex.push("### " + f.path + "\n" + c);

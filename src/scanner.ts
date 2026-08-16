@@ -136,7 +136,7 @@ export async function scanVault(app: App, lastScanTime: number): Promise<VaultSt
       }
     }
 
-    if (f.path.startsWith("知识库/") && f.name !== "README.md" && !f.path.includes("/_模板/")) {
+    if (f.name !== "README.md" && !f.path.includes("/_模板/") && !f.path.startsWith("AI-Workspace/")) {
       const issues: string[] = [];
       if (!fm.hasFrontmatter) issues.push("缺少 frontmatter(规范要求 title/last_updated/sources)");
       else {

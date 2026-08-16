@@ -13,6 +13,9 @@ export interface DSVKSettings {
   lastScanTime: number;
   permissionMode: "auto" | "proposal" | "normal";
   chatHistory: number;
+  /** whole-vault=允许整个仓库;roots-only=仅允许 allowedWriteRoots */
+  writeScope: "whole-vault" | "roots-only";
+  allowedWriteRoots: string[];
   totalPromptTokens: number;
   totalCompletionTokens: number;
 }

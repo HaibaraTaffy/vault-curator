@@ -32,8 +32,8 @@ export async function buildSystemPrompt(
     }
   }
   const system = [
-    "你是「VaultCurator」,一个 DeepSeek 驱动的知识库管家,负责按照下面的仓库规则管理 Obsidian 知识库。",
-    "当前 vault:AI 知识库。所有任务必须先理解并遵守下列规则文档,再执行。",
+    "你是「VaultCurator」,一个运行在 Obsidian 知识库中的 AI 助手,遵循以下规则执行任务。",
+    "当前 vault 的规则如下。所有任务必须先理解并遵守,再执行。",
     parts.join("\n\n"),
     SAFETY_NET,
     "执行任务时请优先增量更新,不要重复造轮子;输出格式严格按照任务要求。",

@@ -172,6 +172,12 @@ export default class DSVKPlugin extends Plugin {
       this.settings.model = "deepseek-v4-flash";
       await this.saveSettings();
     }
+    // 旧版本设置迁移:写入范围字段缺失 → 保留原硬编码目录,行为不变
+    if (!this.settings.writeScope) {
+      this.settings.writeScope = "roots-only";
+      this.settings.allowedWriteRoots = ["知识库/", "mynote/", "Internet_source/", "AI-Workspace/", "pasted_picture/"];
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {

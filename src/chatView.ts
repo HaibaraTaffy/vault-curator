@@ -789,7 +789,10 @@ class ProposalConfirmModal extends Modal {
     const results: string[] = [];
     for (const pr of selected) {
       try {
-        results.push(describeProposal(pr) + " → " + (await performWrite(this.plugin.app, pr)));
+        results.push(
+          describeProposal(pr) + " → " +
+          (await performWrite(this.plugin.app, pr, { wholeVault: this.plugin.settings.writeScope !== "roots-only", allowedRoots: this.plugin.settings.allowedWriteRoots }))
+        );
       } catch (e) {
         results.push(describeProposal(pr) + " → 失败:" + (e instanceof Error ? e.message : String(e)));
       }

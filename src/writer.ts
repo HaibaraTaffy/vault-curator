@@ -20,19 +20,24 @@ export interface HistoryEntry {
   backup?: string;
 }
 
-const ALLOWED_ROOTS = ["知识库/", "mynote/", "Internet_source/", "AI-Workspace/", "pasted_picture/"];
 const FORBIDDEN_SEGMENTS = [".obsidian", ".claudian", ".git", ".trash"];
 const HISTORY_FILE = "AI-Workspace/change-log/history.jsonl";
 
+/** 写入范围配置 */
+export interface WriteScope {
+  wholeVault: boolean;
+  allowedRoots: string[];
+}
+
 /** 规范化笔记路径:补 .md、去前导斜杠;越界返回 null */
-export function normalizeNotePath(p: string): string | null {
+export function normalizeNotePath(p: string, scope: WriteScope): string | null {
   if (!p) return null;
   let path = String(p).trim().replace(/\\/g, "/");
   if (!path.endsWith(".md")) path += ".md";
   if (path.startsWith("/")) path = path.slice(1);
   const segments = path.split("/");
   if (segments.some((seg) => FORBIDDEN_SEGMENTS.includes(seg))) return null;
-  if (!ALLOWED_ROOTS.some((root) => path.startsWith(root))) return null;
+  if (!scope.wholeVault && !scope.allowedRoots.some((root) => path.startsWith(root))) return null;
   return path;
 }
 
@@ -120,8 +125,8 @@ function newEntry(action: HistoryEntry["action"], path: string, extra?: Partial<
 }
 
 /** 执行写操作(快照 + 变更日志 + 历史记录),返回结果文本 */
-export async function performWrite(app: App, pr: WriteProposal): Promise<string> {
-  const path = normalizeNotePath(pr.path);
+export async function performWrite(app: App, pr: WriteProposal, scope: WriteScope): Promise<string> {
+  const path = normalizeNotePath(pr.path, scope);
   if (!path) return "拒绝:路径不在允许的写入范围(" + pr.path + ")";
 
   switch (pr.action) {
@@ -147,7 +152,7 @@ export async function performWrite(app: App, pr: WriteProposal): Promise<string>
     case "move": {
       const f = app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) return "拒绝:源文件不存在 " + path;
-      const target = normalizeNotePath(pr.newPath || "");
+      const target = normalizeNotePath(pr.newPath || "", scope);
       if (!target) return "拒绝:目标路径不在允许范围(" + pr.newPath + ")";
       if (app.vault.getAbstractFileByPath(target)) return "拒绝:目标已存在 " + target;
       await ensureDir(app, target.split("/").slice(0, -1).join("/"));

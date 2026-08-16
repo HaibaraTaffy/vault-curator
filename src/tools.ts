@@ -2,7 +2,7 @@ import { App, TFile, TFolder } from "obsidian";
 import type { DSVKSettings } from "./types";
 import { scanVault, renderReport, isExcluded } from "./scanner";
 import { buildSystemPrompt } from "./rules";
-import { WriteProposal, performWrite, describeProposal, normalizeNotePath } from "./writer";
+import { WriteProposal, performWrite, describeProposal, normalizeNotePath, WriteScope } from "./writer";
 
 export interface ToolDef {
   name: string;
@@ -115,13 +115,18 @@ export function toolsForRequest(): unknown[] {
   }));
 }
 
+/** 从设置构建写入范围 */
+function writeScopeOf(settings: DSVKSettings): WriteScope {
+  return { wholeVault: settings.writeScope !== "roots-only", allowedRoots: settings.allowedWriteRoots };
+}
+
 /** 写操作按权限模式路由 */
 function routeWrite(pr: WriteProposal, app: App, settings: DSVKSettings): Promise<{ text: string; proposal?: WriteProposal }> {
   if (settings.permissionMode === "normal") {
     return Promise.resolve({ text: "只读模式(normal):已阻止 " + describeProposal(pr) });
   }
   if (settings.permissionMode === "auto") {
-    return performWrite(app, pr).then((text) => ({ text }));
+    return performWrite(app, pr, writeScopeOf(settings)).then((text) => ({ text }));
   }
   return Promise.resolve({ text: "[待确认] " + describeProposal(pr) + "(等待用户批准)", proposal: pr });
 }
@@ -208,25 +213,25 @@ export async function executeTool(
       };
     }
     case "create_note": {
-      const path = normalizeNotePath(String(args.path || ""));
+      const path = normalizeNotePath(String(args.path || ""), writeScopeOf(settings));
       if (!path) return { text: "拒绝:路径不在允许范围或非法(" + String(args.path || "") + ")" };
       return routeWrite({ action: "create", path, content: String(args.content ?? "") }, app, settings);
     }
     case "update_note": {
-      const path = normalizeNotePath(String(args.path || ""));
+      const path = normalizeNotePath(String(args.path || ""), writeScopeOf(settings));
       if (!path) return { text: "拒绝:路径不在允许范围或非法(" + String(args.path || "") + ")" };
       const mode = args.mode === "append" ? "append" : "replace";
       return routeWrite({ action: "update", path, content: String(args.content ?? ""), mode }, app, settings);
     }
     case "move_note": {
-      const path = normalizeNotePath(String(args.path || ""));
+      const path = normalizeNotePath(String(args.path || ""), writeScopeOf(settings));
       if (!path) return { text: "拒绝:源路径非法(" + String(args.path || "") + ")" };
-      const target = normalizeNotePath(String(args.new_path || ""));
+      const target = normalizeNotePath(String(args.new_path || ""), writeScopeOf(settings));
       if (!target) return { text: "拒绝:目标路径非法(" + String(args.new_path || "") + ")" };
       return routeWrite({ action: "move", path, newPath: target }, app, settings);
     }
     case "delete_note": {
-      const path = normalizeNotePath(String(args.path || ""));
+      const path = normalizeNotePath(String(args.path || ""), writeScopeOf(settings));
       if (!path) return { text: "拒绝:路径非法(" + String(args.path || "") + ")" };
       return routeWrite({ action: "delete", path }, app, settings);
     }
