@@ -1,7 +1,7 @@
 {
   "id": "vault-curator",
   "name": "VaultCurator · 库策",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.5.0",
   "description": "DeepSeek 驱动的知识库管家:对话面板、工具调用(扫描/搜索/读写笔记)、写操作备份与历史回滚、成本统计。规则由 vault 内 md 文档驱动,不依赖 git。",
   "author": "HaibaraTaffy",
