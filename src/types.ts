@@ -16,6 +16,13 @@ export interface DSVKSettings {
   /** whole-vault=允许整个仓库;roots-only=仅允许 allowedWriteRoots */
   writeScope: "whole-vault" | "roots-only";
   allowedWriteRoots: string[];
+  autoCompress: boolean;
+  compressThreshold: number;
+  keepRecent: number;
+  /** 数据目录:备份/变更日志/历史存放位置 */
+  dataDir: string;
+  /** 一键整理的提示词模板(可自定义) */
+  organizeTemplate: string;
   totalPromptTokens: number;
   totalCompletionTokens: number;
 }

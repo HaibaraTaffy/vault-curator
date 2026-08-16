@@ -63,7 +63,7 @@ function countHighlights(content: string): { count: number; samples: string[] } 
   return { count: total, samples };
 }
 
-export async function scanVault(app: App, lastScanTime: number): Promise<VaultStats> {
+export async function scanVault(app: App, lastScanTime: number, dataDir?: string): Promise<VaultStats> {
   const files = app.vault.getFiles();
   const mdFiles = files.filter((f) => f.extension === "md" && !isExcluded(f.path));
   const stats: VaultStats = {
@@ -136,7 +136,8 @@ export async function scanVault(app: App, lastScanTime: number): Promise<VaultSt
       }
     }
 
-    if (f.name !== "README.md" && !f.path.includes("/_模板/") && !f.path.startsWith("AI-Workspace/")) {
+    const dataDirPrefix = (dataDir || "AI-Workspace") + "/";
+    if (f.name !== "README.md" && !f.path.includes("/_模板/") && !f.path.startsWith(dataDirPrefix)) {
       const issues: string[] = [];
       if (!fm.hasFrontmatter) issues.push("缺少 frontmatter(规范要求 title/last_updated/sources)");
       else {

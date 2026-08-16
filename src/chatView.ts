@@ -2,10 +2,11 @@ import { ItemView, WorkspaceLeaf, MarkdownRenderer, Notice, TFile, setIcon, Moda
 import type { App } from "obsidian";
 import type DSVKPlugin from "./main";
 import type { Session, ToolLogEntry } from "./chatAgent";
-import { runAgentTurn } from "./chatAgent";
+import { runAgentTurn, compressSession } from "./chatAgent";
 import type { ChatMessage } from "./types";
-import { performWrite, describeProposal } from "./writer";
+import { performWrite, describeProposal, vaultConfigOf } from "./writer";
 import { costTextFor } from "./pricing";
+import { estimateTokens } from "./deepseek";
 import type { WriteProposal } from "./writer";
 
 export const VIEW_TYPE_STEWARD = "dsvk-steward";
@@ -38,6 +39,8 @@ export class StewardView extends ItemView {
   private elChipRow!: HTMLElement;
   private elStatus!: HTMLElement;
   private elEmptyState: HTMLElement | null = null;
+  private elInfo: HTMLElement | null = null;
+  private infoTimer: number | null = null;
   private thinkingTimer: number | null = null;
   private lastActivity = 0;
   private readonly WELCOME_PHRASES = [
@@ -129,6 +132,11 @@ export class StewardView extends ItemView {
     delBtn.addEventListener("click", () => {
       void this.deleteActiveSession();
     });
+    const compressBtn = bar.createEl("button", { cls: "dsvk-icon-btn", title: "压缩上下文(摘要旧消息)" });
+    setIcon(compressBtn, "scissors");
+    compressBtn.addEventListener("click", () => {
+      void this.manualCompress();
+    });
 
     // 输入框
     const box = inputWrap.createDiv({ cls: "dsvk-input-box" });
@@ -218,7 +226,7 @@ export class StewardView extends ItemView {
       this.sessions = loaded;
       if (!this.activeId && loaded.length) this.activeId = loaded[0].id;
     } catch (e) {
-      new Notice("加载会话失败:" + String(e));
+      void this.plugin.chatInfo("⚠️ 加载会话失败:" + String(e));
     }
   }
 
@@ -226,7 +234,7 @@ export class StewardView extends ItemView {
     try {
       await this.adapter().write(SESSION_DIR + "/" + s.id + ".json", JSON.stringify(s, null, 2));
     } catch (e) {
-      new Notice("保存会话失败:" + String(e));
+      void this.plugin.chatInfo("⚠️ 保存会话失败:" + String(e));
     }
   }
 
@@ -253,13 +261,49 @@ export class StewardView extends ItemView {
     try {
       await this.adapter().remove(SESSION_DIR + "/" + id + ".json");
     } catch (e) {
-      new Notice("删除会话失败:" + String(e));
+      void this.plugin.chatInfo("⚠️ 删除会话失败:" + String(e));
     }
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.activeId = this.sessions.length ? this.sessions[0].id : null;
     if (!this.activeId) await this.newSession();
     this.renderSessionList();
     this.renderMessages();
+  }
+
+  private async manualCompress(): Promise<void> {
+    const session = this.activeSession();
+    if (!session) return;
+    if (this.busy) return;
+    if (!this.plugin.settings.apiKey) {
+      void this.plugin.chatInfo("⚠️ 未配置 API Key,无法压缩");
+      return;
+    }
+    const keep = this.plugin.settings.keepRecent;
+    const oldCount = session.messages.length - keep;
+    if (oldCount <= 3) {
+      void this.plugin.chatInfo("会话还短,暂无压缩必要");
+      return;
+    }
+    const estTokens = session.messages
+      .slice(0, Math.max(0, oldCount))
+      .reduce((sum, m) => sum + estimateTokens(String(m.content || "")), 0);
+    const ok = await confirmOk(
+      this.app,
+      "压缩上下文",
+      "将把前面 " + oldCount + " 条消息压缩成摘要,保留最近 " + keep + " 条。\n\n预计减少上下文输入约 " + estTokens.toLocaleString() + " tokens。\n旧的原始消息会被摘要替代(不可恢复),继续?"
+    );
+    if (!ok) return;
+    this.setStatus("正在压缩上下文…");
+    const r = await compressSession(this.plugin.app, this.plugin.settings, session);
+    if (r.removed > 0) {
+      await this.saveSession(session);
+      const saved = Math.round(r.savedChars / 1.7);
+      this.setStatus("已压缩 " + r.removed + " 条旧消息为摘要(约省 " + saved.toLocaleString() + " tokens)");
+      void this.plugin.chatInfo("已压缩上下文,摘要已生成");
+    } else {
+      this.setStatus("");
+      void this.plugin.chatInfo("⚠️ 压缩未执行(失败或无需压缩)");
+    }
   }
 
   private renderSessionList(): void {
@@ -297,6 +341,11 @@ export class StewardView extends ItemView {
   private renderMessages(): void {
     this.elMessages.empty();
     this.elEmptyState = null;
+    this.elInfo = null;
+    if (this.infoTimer !== null) {
+      window.clearTimeout(this.infoTimer);
+      this.infoTimer = null;
+    }
     const s = this.activeSession();
     if (!s) return;
     if (!s.messages.length) {
@@ -358,7 +407,7 @@ export class StewardView extends ItemView {
     const copyBtn = col.createEl("button", { cls: "dsvk-copy-btn", title: "复制回复" });
     setIcon(copyBtn, "copy");
     copyBtn.addEventListener("click", () => {
-      void copyToClipboard(md);
+      void copyToClipboard(this.plugin, md);
     });
   }
 
@@ -383,7 +432,7 @@ export class StewardView extends ItemView {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        void openNoteFile(this.app, f.path);
+        void openNoteFile(this.plugin, f.path);
       });
       code.replaceWith(a);
     });
@@ -415,7 +464,7 @@ export class StewardView extends ItemView {
         a.addEventListener("click", (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          void openNoteFile(this.app, f.path);
+          void openNoteFile(this.plugin, f.path);
         });
         frag.appendChild(a);
         last = m.index + m[0].length;
@@ -446,7 +495,7 @@ export class StewardView extends ItemView {
       ev.stopPropagation();
       let decoded = path;
       try { decoded = decodeURIComponent(path); } catch (e) { /* keep raw */ }
-      void openNoteFile(this.plugin.app, decoded.replace(/^#/, ""));
+      void openNoteFile(this.plugin, decoded.replace(/^#/, ""));
     });
     // 若渲染器没生效(仍是字面 markdown 结构),回退到纯文本+链接,保证可点
     window.setTimeout(() => {
@@ -502,7 +551,7 @@ export class StewardView extends ItemView {
         a.addEventListener("click", (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          void openNoteFile(this.app, path as string);
+          void openNoteFile(this.plugin, path as string);
         });
       } else {
         el.appendText(m[0]);
@@ -524,7 +573,7 @@ export class StewardView extends ItemView {
     if (openPath && resolveNote(this.plugin.app, openPath)) {
       line.addClass("dsvk-work-link");
       line.addEventListener("click", () => {
-        void openNoteFile(this.plugin.app, openPath as string);
+        void openNoteFile(this.plugin, openPath as string);
       });
     }
   }
@@ -555,7 +604,7 @@ export class StewardView extends ItemView {
     const copyBtn = col.createEl("button", { cls: "dsvk-copy-btn", title: "复制回复" });
     setIcon(copyBtn, "copy");
     copyBtn.addEventListener("click", () => {
-      void copyToClipboard(md);
+      void copyToClipboard(this.plugin, md);
     });
     this.elMessages.scrollTop = this.elMessages.scrollHeight;
   }
@@ -564,7 +613,7 @@ export class StewardView extends ItemView {
   private attachCurrentNote(): void {
     const f = this.plugin.app.workspace.getActiveFile();
     if (!(f instanceof TFile) || f.extension !== "md") {
-      new Notice("当前没有打开的 Markdown 笔记");
+      void this.plugin.chatInfo("⚠️ 当前没有打开的 Markdown 笔记");
       return;
     }
     void this.plugin.app.vault
@@ -578,7 +627,7 @@ export class StewardView extends ItemView {
         this.renderChip();
       })
       .catch(() => {
-        new Notice("读取笔记失败");
+        void this.plugin.chatInfo("⚠️ 读取笔记失败");
       });
   }
 
@@ -621,6 +670,25 @@ export class StewardView extends ItemView {
   }
 
   // ---------- input / send ----------
+  /** 在对话区显示淡色提示(单元素复用,重复调用只替换文字;替代右上角浮窗) */
+  showInfo(text: string): boolean {
+    if (!this.elMessages) return false;
+    if (!this.elInfo || !this.elInfo.isConnected) {
+      this.elInfo = this.elMessages.createDiv({ cls: "dsvk-msg info" });
+      this.elInfo.createSpan({ cls: "dsvk-info-text" });
+    }
+    const span = this.elInfo.querySelector(".dsvk-info-text");
+    if (span) span.setText(text);
+    this.elMessages.scrollTop = this.elMessages.scrollHeight;
+    if (this.infoTimer !== null) window.clearTimeout(this.infoTimer);
+    this.infoTimer = window.setTimeout(() => {
+      if (this.elInfo && this.elInfo.isConnected) this.elInfo.remove();
+      this.elInfo = null;
+      this.infoTimer = null;
+    }, 5000);
+    return true;
+  }
+
   private setStatus(text: string): void {
     this.elStatus.setText(text);
   }
@@ -643,7 +711,7 @@ export class StewardView extends ItemView {
     if (!text) return;
     if (this.busy) return;
     if (!this.plugin.settings.apiKey) {
-      new Notice("请先在插件设置页填写 DeepSeek API Key");
+      void this.plugin.chatInfo("⚠️ 请先在插件设置页填写 DeepSeek API Key");
       return;
     }
     const session = this.activeSession();
@@ -723,6 +791,13 @@ export class StewardView extends ItemView {
         this.renderSessionList();
       }
       await this.saveSession(session);
+      if (this.plugin.settings.autoCompress && session.messages.length > this.plugin.settings.compressThreshold) {
+        const cr = await compressSession(this.plugin.app, this.plugin.settings, session);
+        if (cr.removed > 0) {
+          await this.saveSession(session);
+          this.setStatus("已自动压缩 " + cr.removed + " 条旧消息为摘要");
+        }
+      }
     } catch (e) {
       const err = e as Error;
       if (err && err.name === "TimeoutError") {
@@ -791,14 +866,14 @@ class ProposalConfirmModal extends Modal {
       try {
         results.push(
           describeProposal(pr) + " → " +
-          (await performWrite(this.plugin.app, pr, { wholeVault: this.plugin.settings.writeScope !== "roots-only", allowedRoots: this.plugin.settings.allowedWriteRoots }))
+          (await performWrite(this.plugin.app, pr, vaultConfigOf(this.plugin.settings)))
         );
       } catch (e) {
         results.push(describeProposal(pr) + " → 失败:" + (e instanceof Error ? e.message : String(e)));
       }
     }
     this.close();
-    new Notice("已执行 " + results.length + " 项写操作,详见控制台");
+    void this.plugin.chatInfo("已执行 " + results.length + " 项写操作,详见控制台");
     console.log("VaultCurator 写操作结果:\n" + results.join("\n"));
   }
 
@@ -819,10 +894,10 @@ function fmtArgs(args: string): string {
   return " " + args.slice(0, 60);
 }
 
-async function copyToClipboard(text: string): Promise<void> {
+async function copyToClipboard(plugin: DSVKPlugin, text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-    new Notice("已复制");
+    void plugin.chatInfo("已复制");
   } catch (e) {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -830,7 +905,7 @@ async function copyToClipboard(text: string): Promise<void> {
     ta.select();
     document.execCommand("copy");
     document.body.removeChild(ta);
-    new Notice("已复制");
+    void plugin.chatInfo("已复制");
   }
 }
 
@@ -873,16 +948,39 @@ function resolveNote(app: App, p: string): TFile | null {
   }
 }
 
-async function openNoteFile(app: App, path: string): Promise<void> {
-  const f = resolveNote(app, path);
+async function openNoteFile(plugin: DSVKPlugin, path: string): Promise<void> {
+  const f = resolveNote(plugin.app, path);
   if (f) {
-    await app.workspace.getLeaf(false).openFile(f);
+    await plugin.app.workspace.getLeaf(false).openFile(f);
   } else {
-    new Notice("未找到文件:" + path);
+    void plugin.chatInfo("⚠️ 未找到文件:" + path);
   }
 }
 
 function costText(prompt: number, completion: number): string {
   const cny = (prompt / 1e6) * 2 + (completion / 1e6) * 8;
   return "≈¥" + (cny >= 0.01 ? cny.toFixed(2) : cny.toFixed(4));
+}
+
+function confirmOk(app: App, title: string, msg: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const m = new Modal(app);
+    m.titleEl.setText(title);
+    const p = m.contentEl.createEl("p", { text: msg });
+    p.style.whiteSpace = "pre-wrap";
+    const row = m.contentEl.createDiv();
+    row.style.marginTop = "8px";
+    const okBtn = row.createEl("button", { text: "压缩", cls: "mod-cta" });
+    okBtn.style.marginRight = "8px";
+    okBtn.addEventListener("click", () => {
+      m.close();
+      resolve(true);
+    });
+    const noBtn = row.createEl("button", { text: "取消" });
+    noBtn.addEventListener("click", () => {
+      m.close();
+      resolve(false);
+    });
+    m.open();
+  });
 }

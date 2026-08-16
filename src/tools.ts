@@ -2,7 +2,7 @@ import { App, TFile, TFolder } from "obsidian";
 import type { DSVKSettings } from "./types";
 import { scanVault, renderReport, isExcluded } from "./scanner";
 import { buildSystemPrompt } from "./rules";
-import { WriteProposal, performWrite, describeProposal, normalizeNotePath, WriteScope } from "./writer";
+import { WriteProposal, performWrite, describeProposal, normalizeNotePath, WriteScope, vaultConfigOf } from "./writer";
 
 export interface ToolDef {
   name: string;
@@ -59,7 +59,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: "create_note",
     description:
-      "新建一篇 Markdown 笔记(带内容)。路径必须位于 知识库/、mynote/、Internet_source/、AI-Workspace/、pasted_picture/ 下。auto 模式直接执行,proposal 模式等待用户确认。自动写变更日志。",
+      "新建一篇 Markdown 笔记(带内容)。路径必须在设置的写入范围内(默认整个仓库,排除 .git/.obsidian/.claudian)。auto 模式直接执行,proposal 模式等待用户确认。自动写变更日志。",
     parameters: {
       type: "object",
       properties: {
@@ -72,7 +72,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: "update_note",
     description:
-      "更新一篇现有笔记:mode=replace 整体替换内容(默认),mode=append 在末尾追加。改动前自动备份到 AI-Workspace/archive/,并写变更日志。",
+      "更新一篇现有笔记:mode=replace 整体替换内容(默认),mode=append 在末尾追加。改动前自动备份到数据目录的 archive/,并写变更日志。",
     parameters: {
       type: "object",
       properties: {
@@ -97,7 +97,7 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: "delete_note",
-    description: "删除一篇笔记(进系统回收站,可恢复)。删除前自动备份到 AI-Workspace/archive/,并写变更日志。",
+    description: "删除一篇笔记(进系统回收站,可恢复)。删除前自动备份到数据目录的 archive/,并写变更日志。",
     parameters: {
       type: "object",
       properties: {
@@ -126,7 +126,7 @@ function routeWrite(pr: WriteProposal, app: App, settings: DSVKSettings): Promis
     return Promise.resolve({ text: "只读模式(normal):已阻止 " + describeProposal(pr) });
   }
   if (settings.permissionMode === "auto") {
-    return performWrite(app, pr, writeScopeOf(settings)).then((text) => ({ text }));
+    return performWrite(app, pr, vaultConfigOf(settings)).then((text) => ({ text }));
   }
   return Promise.resolve({ text: "[待确认] " + describeProposal(pr) + "(等待用户批准)", proposal: pr });
 }

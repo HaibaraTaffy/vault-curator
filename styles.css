@@ -137,6 +137,22 @@
   color: #fff;
 }
 
+/* 对话区淡色提示:居中、小字、紧贴上一条正文(单元素) */
+.dsvk-msg.info {
+  justify-content: center;
+  margin-top: -11px;
+  margin-bottom: -6px;
+  padding: 0;
+}
+.dsvk-info-text {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.4;
+  text-align: center;
+  word-break: break-word;
+  max-width: 90%;
+}
+
 /* 消息区 */
 .dsvk-messages {
   flex: 1;

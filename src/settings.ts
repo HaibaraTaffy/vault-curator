@@ -2,6 +2,7 @@ import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type DSVKPlugin from "./main";
 import type { DSVKSettings } from "./types";
 import { deepseekPing } from "./deepseek";
+import { DEFAULT_ORGANIZE_TEMPLATE } from "./organize";
 
 export const DEFAULT_SETTINGS: DSVKSettings = {
   apiKey: "",
@@ -20,6 +21,11 @@ export const DEFAULT_SETTINGS: DSVKSettings = {
   chatHistory: 40,
   writeScope: "whole-vault",
   allowedWriteRoots: [],
+  autoCompress: true,
+  compressThreshold: 60,
+  keepRecent: 20,
+  dataDir: "AI-Workspace",
+  organizeTemplate: DEFAULT_ORGANIZE_TEMPLATE,
   totalPromptTokens: 0,
   totalCompletionTokens: 0,
 };
@@ -164,6 +170,32 @@ export class DSVKSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("数据目录")
+      .setDesc("备份/变更日志/历史记录存放的目录(相对 vault 根)。默认 AI-Workspace,可改成 .vault-curator 等。")
+      .addText((tb) =>
+        tb
+          .setPlaceholder("AI-Workspace")
+          .setValue(this.plugin.settings.dataDir)
+          .onChange(async (v) => {
+            this.plugin.settings.dataDir = v.trim() || "AI-Workspace";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("一键整理模板")
+      .setDesc("「一键整理」命令的任务提示词。留空使用默认通用模板;可覆盖为自己的工作流(规则文档仍会注入系统提示词)。")
+      .addTextArea((ta) =>
+        ta
+          .setPlaceholder(DEFAULT_ORGANIZE_TEMPLATE.slice(0, 120) + "…")
+          .setValue(this.plugin.settings.organizeTemplate === DEFAULT_ORGANIZE_TEMPLATE ? "" : this.plugin.settings.organizeTemplate)
+          .onChange(async (v) => {
+            this.plugin.settings.organizeTemplate = v.trim() || DEFAULT_ORGANIZE_TEMPLATE;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("规则文档(系统提示词来源)")
       .setDesc("每行一个 vault 内 md 路径,回车分隔。留空则无额外规则,行为完全由对话指示决定。改这些文档即改 AI 行为。")
       .addTextArea((ta) =>
@@ -187,6 +219,43 @@ export class DSVKSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("自动压缩上下文")
+      .setDesc("消息数超过阈值后,自动把旧消息压缩成摘要(需 API)。摘要作为背景注入,保留最近若干条完整消息。")
+      .addToggle((tgl) =>
+        tgl.setValue(this.plugin.settings.autoCompress).onChange(async (v) => {
+          this.plugin.settings.autoCompress = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("压缩触发阈值(消息数)")
+      .setDesc("超过该条数触发自动压缩。")
+      .addSlider((sl) =>
+        sl
+          .setLimits(30, 200, 10)
+          .setValue(this.plugin.settings.compressThreshold)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.compressThreshold = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("压缩时保留的最近消息数")
+      .addSlider((sl) =>
+        sl
+          .setLimits(10, 50, 5)
+          .setValue(this.plugin.settings.keepRecent)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.keepRecent = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("自动写变更日志")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.writeChangelog).onChange(async (v) => {
@@ -203,9 +272,9 @@ export class DSVKSettingsTab extends PluginSettingTab {
           btn.setDisabled(true).setButtonText("测试中…");
           try {
             const models = await deepseekPing(this.plugin.settings);
-            new Notice("连接成功,可用模型: " + models.join(", "));
+            await this.plugin.chatInfo("连接成功,可用模型: " + models.join(", "));
           } catch (e) {
-            new Notice("连接失败: " + (e instanceof Error ? e.message : String(e)), 8000);
+            await this.plugin.chatInfo("⚠️ 连接失败: " + (e instanceof Error ? e.message : String(e)));
           } finally {
             btn.setDisabled(false).setButtonText("测试 DeepSeek 连接");
           }

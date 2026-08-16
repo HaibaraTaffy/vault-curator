@@ -26,25 +26,30 @@ export function formatCostEstimate(inputTokens: number, outputTokens: number, mo
   );
 }
 
-const OUTPUT_SCHEMA = `## 输出要求
+/** 默认的一键整理模板(通用;用户可在设置里覆盖为自己的工作流) */
+export const DEFAULT_ORGANIZE_TEMPLATE = `## 任务
+基于下面的扫描结果与素材,结合规则文档(如已配置)给出**增量整理建议**。这是只读分析,不要执行写操作。
+
+## 输出要求
 严格输出一个 JSON 对象,不要包含解释、Markdown 代码块或多余文字。结构如下:
 {
   "summary": "一句话总结本次整理要点",
-  "newTopics": [{"path": "知识库/xx/yy.md", "title": "主题名", "reason": "为什么建", "source": "材料来源(来自哪些 mynote/Internet_source 文件)"}],
-  "updates": [{"path": "要更新的主题页路径", "content": "建议补充/修改的具体内容", "reason": "原因"}],
+  "newNotes": [{"path": "建议的笔记路径", "title": "标题", "reason": "为什么建", "source": "素材来源"}],
+  "updates": [{"path": "要更新的笔记路径", "content": "建议补充/修改的具体内容", "reason": "原因"}],
   "linkSuggestions": [{"from": "源笔记", "to": "目标笔记", "reason": "为什么建双链"}],
-  "highlightActions": [{"location": "高亮所在文件与上下文", "answer": "尽量给出可靠回答;无法可靠回答则写'待查证'", "confidence": "high|medium|low", "source": "依据来源(必须真实,不可虚构)", "nextStep": "写入解疑答惑|写入知识扩展清单|转入AI-Workspace/controversial"}],
-  "nextActions": ["后续可执行的具体动作"],
+  "questions": [{"location": "位置(如 ==高亮== 所在)", "note": "疑问或待核查事项"}],
   "risks": ["本次建议可能存在的风险或需人工复核的点"]
 }
-规则:不虚构来源;无材料支撑的不建议新建主题;所有建议应增量、具体、可执行。
-对可回答的高亮疑问必须给出具体、可核查的回答与真实来源;只有确实无法可靠回答时才标记 confidence=low 并建议转入 AI-Workspace/controversial。`;
+规则:不虚构来源;无素材支撑的不建议新建;所有建议应增量、具体、可执行;遇到 ==高亮疑问== 等特殊情况按规则文档处理。`;
+
 
 export async function buildOrganizeInput(
   app: App,
-  settings: DSVKSettings
+  settings: DSVKSettings,
+  template?: string
 ): Promise<{ user: string; inputTokens: number; scanned: VaultStats }> {
-  const stats = await scanVault(app, settings.lastScanTime);
+  const tpl = template || settings.organizeTemplate || DEFAULT_ORGANIZE_TEMPLATE;
+  const stats = await scanVault(app, settings.lastScanTime, settings.dataDir);
   const parts: string[] = [];
 
   parts.push("## 扫描结果");
@@ -84,7 +89,7 @@ export async function buildOrganizeInput(
     parts.push(contentParts.join("\n\n"));
   }
 
-  parts.push(OUTPUT_SCHEMA);
+  parts.push(tpl);
   const user = parts.join("\n\n");
   return { user, inputTokens: estimateTokens(user), scanned: stats };
 }

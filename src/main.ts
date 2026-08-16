@@ -6,7 +6,7 @@ import { scanVault, renderReport } from "./scanner";
 import { deepseekPing } from "./deepseek";
 import { buildOrganizeInput, formatCostEstimate, runOrganize } from "./organize";
 import { StewardView, VIEW_TYPE_STEWARD } from "./chatView";
-import { listHistory, rollback, HistoryEntry } from "./writer";
+import { listHistory, rollback, HistoryEntry, vaultConfigOf } from "./writer";
 
 export default class DSVKPlugin extends Plugin {
   settings!: DSVKSettings;
@@ -109,21 +109,28 @@ export default class DSVKPlugin extends Plugin {
     if (view) view.attachSelection(file ? file.path : "", text);
   }
 
+  /** 信息提示:优先显示在对话界面(淡色字),对话面板未打开时回退浮窗 */
+  async chatInfo(text: string): Promise<void> {
+    const v = this.stewardView;
+    if (v && v.showInfo(text)) return;
+    new Notice(text, 6000);
+  }
+
   async runScanReport(): Promise<void> {
-    const stats = await scanVault(this.app, this.settings.lastScanTime);
+    const stats = await scanVault(this.app, this.settings.lastScanTime, this.settings.dataDir);
     this.settings.lastScanTime = stats.scannedAt;
     await this.saveSettings();
     const report = renderReport(stats);
-    new TextReportModal(this.app, "Vault 扫描报告(只读)", report).open();
+    new TextReportModal(this.app, this, "Vault 扫描报告(只读)", report).open();
     const hlTotal = stats.highlights.reduce((a, h) => a + h.count, 0);
-    new Notice(
+    void this.chatInfo(
       "扫描完成:md " + stats.totalMd + " 个,新增/更新 " + stats.newOrUpdated.length + " 个,高亮疑问 " + hlTotal + " 处"
     );
   }
 
   async runOrganize(): Promise<void> {
     if (!this.settings.apiKey) {
-      new Notice("请先在设置页填写 DeepSeek API Key");
+      void this.chatInfo("⚠️ 请先在设置页填写 DeepSeek API Key");
       return;
     }
     try {
@@ -138,18 +145,18 @@ export default class DSVKPlugin extends Plugin {
       const res = await runOrganize(this.app, this.settings, { user: input.user });
       this.settings.lastScanTime = input.scanned.scannedAt;
       await this.saveSettings();
-      new TextReportModal(this.app, "一键整理建议(只读)", res.report + "\n\n" + res.usageText).open();
+      new TextReportModal(this.app, this, "一键整理建议(只读)", res.report + "\n\n" + res.usageText).open();
     } catch (e) {
-      new Notice("一键整理失败: " + (e instanceof Error ? e.message : String(e)), 8000);
+      void this.chatInfo("⚠️ 一键整理失败: " + (e instanceof Error ? e.message : String(e)));
     }
   }
 
   async runTestConnection(): Promise<void> {
     try {
       const models = await deepseekPing(this.settings);
-      new Notice("DeepSeek 连接成功,可用模型: " + models.join(", "));
+      void this.chatInfo("DeepSeek 连接成功,可用模型: " + models.join(", "));
     } catch (e) {
-      new Notice("连接失败: " + (e instanceof Error ? e.message : String(e)), 8000);
+      void this.chatInfo("⚠️ 连接失败: " + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -162,7 +169,7 @@ export default class DSVKPlugin extends Plugin {
       "未找到/跳过:",
       ...(r.skipped.length ? r.skipped.map((x) => "- " + x) : ["- (无)"]),
     ];
-    new TextReportModal(this.app, "规则文档加载状态", lines.join("\n")).open();
+    new TextReportModal(this.app, this, "规则文档加载状态", lines.join("\n")).open();
   }
 
   async loadSettings(): Promise<void> {
@@ -170,6 +177,11 @@ export default class DSVKPlugin extends Plugin {
     // 旧版本设置迁移:旧模型名 → 新模型名
     if (this.settings.model === "deepseek-chat") {
       this.settings.model = "deepseek-v4-flash";
+      await this.saveSettings();
+    }
+    // 旧版本设置迁移:数据目录
+    if (!this.settings.dataDir) {
+      this.settings.dataDir = "AI-Workspace";
       await this.saveSettings();
     }
     // 旧版本设置迁移:写入范围字段缺失 → 保留原硬编码目录,行为不变
@@ -190,11 +202,13 @@ export default class DSVKPlugin extends Plugin {
 }
 
 class TextReportModal extends Modal {
+  plugin: DSVKPlugin;
   title: string;
   text: string;
 
-  constructor(app: App, title: string, text: string) {
+  constructor(app: App, plugin: DSVKPlugin, title: string, text: string) {
     super(app);
+    this.plugin = plugin;
     this.title = title;
     this.text = text;
     this.titleEl.setText(title);
@@ -214,7 +228,7 @@ class TextReportModal extends Modal {
     btnRow.style.marginTop = "8px";
     const copyBtn = btnRow.createEl("button", { text: "复制报告" });
     copyBtn.addEventListener("click", () => {
-      void copyText(this.text);
+      void copyText(this.plugin, this.text);
     });
     const closeBtn = btnRow.createEl("button", { text: "关闭" });
     closeBtn.style.marginLeft = "8px";
@@ -275,10 +289,10 @@ function confirmDialog(app: App, title: string, message: string): Promise<boolea
   });
 }
 
-async function copyText(text: string): Promise<void> {
+async function copyText(plugin: DSVKPlugin, text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
-    new Notice("报告已复制到剪贴板");
+    void plugin.chatInfo("报告已复制到剪贴板");
   } catch (e) {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -286,7 +300,7 @@ async function copyText(text: string): Promise<void> {
     ta.select();
     document.execCommand("copy");
     document.body.removeChild(ta);
-    new Notice("报告已复制到剪贴板(降级方式)");
+    void plugin.chatInfo("报告已复制到剪贴板(降级方式)");
   }
 }
 
@@ -312,7 +326,7 @@ class HistoryModal extends Modal {
   async onOpen(): Promise<void> {
     const { contentEl } = this;
     contentEl.empty();
-    const entries = await listHistory(this.plugin.app);
+    const entries = await listHistory(this.plugin.app, vaultConfigOf(this.plugin.settings));
     if (!entries.length) {
       contentEl.createEl("p", { text: "暂无历史记录——AI 还没执行过写操作。" });
       return;
@@ -360,12 +374,12 @@ class HistoryModal extends Modal {
       this.app,
       "确认回滚",
       "回滚:[" + actionLabel(e) + "] " + e.path + (e.newPath ? " → " + e.newPath : "") +
-        "\n\n回滚会先把当前状态备份到 AI-Workspace/archive/,并写入变更日志。"
+        "\n\n回滚会先把当前状态备份到数据目录的 archive/,并写入变更日志。"
     );
     if (!ok) return;
     btn.disabled = true;
-    const result = await rollback(this.plugin.app, e);
-    new Notice(result, 6000);
+    const result = await rollback(this.plugin.app, vaultConfigOf(this.plugin.settings), e);
+    await this.plugin.chatInfo(result);
     await this.onOpen();
   }
 

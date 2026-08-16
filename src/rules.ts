@@ -6,7 +6,7 @@ const SAFETY_NET = [
   "1. 禁止执行任何 git 命令,禁止创建/修改/删除 .git 文件或目录,禁止嵌套仓库、submodule、worktree。",
   "2. 禁止修改 .obsidian 目录下的文件(本插件自身除外)与 .claudian 目录。",
   "3. 所有批量移动/重命名/删除操作必须经过用户预览确认(除非用户明确开启自动模式)。",
-  "4. 未经验证的结论不得写入 知识库/ 作为通用事实;核查细节应放 AI-Workspace/evidence/。",
+  "4. 未经验证的结论不得当作通用事实写入主知识库;核查细节应放证据目录(如规则文档指定)。",
 ].join("\n");
 
 export async function buildSystemPrompt(

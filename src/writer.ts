@@ -21,12 +21,17 @@ export interface HistoryEntry {
 }
 
 const FORBIDDEN_SEGMENTS = [".obsidian", ".claudian", ".git", ".trash"];
-const HISTORY_FILE = "AI-Workspace/change-log/history.jsonl";
 
 /** 写入范围配置 */
 export interface WriteScope {
   wholeVault: boolean;
   allowedRoots: string[];
+}
+
+/** 仓库运行配置:写入范围 + 数据目录(备份/变更日志/历史) */
+export interface VaultConfig {
+  scope: WriteScope;
+  dataDir: string;
 }
 
 /** 规范化笔记路径:补 .md、去前导斜杠;越界返回 null */
@@ -67,9 +72,13 @@ function dirnameOf(p: string): string {
   return i > 0 ? p.slice(0, i) : "";
 }
 
-async function writeChangelog(app: App, line: string): Promise<void> {
+function historyFile(cfg: VaultConfig): string {
+  return (cfg.dataDir || "AI-Workspace") + "/change-log/history.jsonl";
+}
+
+async function writeChangelog(app: App, cfg: VaultConfig, line: string): Promise<void> {
   try {
-    const dir = "AI-Workspace/change-log";
+    const dir = (cfg.dataDir || "AI-Workspace") + "/change-log";
     await ensureDir(app, dir);
     const filePath = dir + "/" + todayStr() + ".md";
     const stamp = new Date().toLocaleTimeString();
@@ -84,9 +93,9 @@ async function writeChangelog(app: App, line: string): Promise<void> {
   }
 }
 
-async function backupFile(app: App, path: string, content: string): Promise<string | null> {
+async function backupFile(app: App, cfg: VaultConfig, path: string, content: string): Promise<string | null> {
   try {
-    const dir = "AI-Workspace/archive/" + todayStr();
+    const dir = (cfg.dataDir || "AI-Workspace") + "/archive/" + todayStr();
     await ensureDir(app, dir);
     const base = path.split("/").pop() || "note";
     const backupPath = dir + "/" + String(Date.now()) + "-" + base;
@@ -99,15 +108,16 @@ async function backupFile(app: App, path: string, content: string): Promise<stri
 }
 
 /** 追加一条机器可读历史(JSON Lines) */
-async function appendHistory(app: App, entry: HistoryEntry): Promise<void> {
+async function appendHistory(app: App, cfg: VaultConfig, entry: HistoryEntry): Promise<void> {
   try {
-    await ensureDir(app, "AI-Workspace/change-log");
+    const file = historyFile(cfg);
+    await ensureDir(app, (cfg.dataDir || "AI-Workspace") + "/change-log");
     const line = JSON.stringify(entry) + "\n";
-    if (!(await app.vault.adapter.exists(HISTORY_FILE))) {
-      await app.vault.adapter.write(HISTORY_FILE, line);
+    if (!(await app.vault.adapter.exists(file))) {
+      await app.vault.adapter.write(file, line);
     } else {
-      const existing = await app.vault.adapter.read(HISTORY_FILE);
-      await app.vault.adapter.write(HISTORY_FILE, existing.replace(/\s+$/, "") + "\n" + line);
+      const existing = await app.vault.adapter.read(file);
+      await app.vault.adapter.write(file, existing.replace(/\s+$/, "") + "\n" + line);
     }
   } catch (e) {
     console.error("写历史失败:", e);
@@ -125,8 +135,8 @@ function newEntry(action: HistoryEntry["action"], path: string, extra?: Partial<
 }
 
 /** 执行写操作(快照 + 变更日志 + 历史记录),返回结果文本 */
-export async function performWrite(app: App, pr: WriteProposal, scope: WriteScope): Promise<string> {
-  const path = normalizeNotePath(pr.path, scope);
+export async function performWrite(app: App, pr: WriteProposal, cfg: VaultConfig): Promise<string> {
+  const path = normalizeNotePath(pr.path, cfg.scope);
   if (!path) return "拒绝:路径不在允许的写入范围(" + pr.path + ")";
 
   switch (pr.action) {
@@ -134,51 +144,52 @@ export async function performWrite(app: App, pr: WriteProposal, scope: WriteScop
       if (app.vault.getAbstractFileByPath(path)) return "拒绝:文件已存在 " + path;
       await ensureDir(app, path.split("/").slice(0, -1).join("/"));
       await app.vault.create(path, pr.content || "");
-      await writeChangelog(app, "新建 " + path);
-      await appendHistory(app, newEntry("create", path));
+      await writeChangelog(app, cfg, "新建 " + path);
+      await appendHistory(app, cfg, newEntry("create", path));
       return "已创建 " + path;
     }
     case "update": {
       const f = app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) return "拒绝:文件不存在 " + path;
       const old = await app.vault.cachedRead(f);
-      const backup = await backupFile(app, path, old);
+      const backup = await backupFile(app, cfg, path, old);
       const next = pr.mode === "append" ? old.replace(/\s+$/, "") + "\n\n" + (pr.content || "") : (pr.content ?? "");
       await app.vault.modify(f, next);
-      await writeChangelog(app, "更新 " + path + (pr.mode === "append" ? "(追加)" : ""));
-      await appendHistory(app, newEntry("update", path, { backup: backup || undefined }));
+      await writeChangelog(app, cfg, "更新 " + path + (pr.mode === "append" ? "(追加)" : ""));
+      await appendHistory(app, cfg, newEntry("update", path, { backup: backup || undefined }));
       return "已更新 " + path;
     }
     case "move": {
       const f = app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) return "拒绝:源文件不存在 " + path;
-      const target = normalizeNotePath(pr.newPath || "", scope);
+      const target = normalizeNotePath(pr.newPath || "", cfg.scope);
       if (!target) return "拒绝:目标路径不在允许范围(" + pr.newPath + ")";
       if (app.vault.getAbstractFileByPath(target)) return "拒绝:目标已存在 " + target;
       await ensureDir(app, target.split("/").slice(0, -1).join("/"));
       await app.fileManager.renameFile(f, target);
-      await writeChangelog(app, "移动 " + path + " → " + target);
-      await appendHistory(app, newEntry("move", path, { newPath: target }));
+      await writeChangelog(app, cfg, "移动 " + path + " → " + target);
+      await appendHistory(app, cfg, newEntry("move", path, { newPath: target }));
       return "已移动 " + path + " → " + target;
     }
     case "delete": {
       const f = app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) return "拒绝:文件不存在 " + path;
       const old = await app.vault.cachedRead(f);
-      const backup = await backupFile(app, path, old);
+      const backup = await backupFile(app, cfg, path, old);
       await app.vault.trash(f, true);
-      await writeChangelog(app, "删除 " + path + "(回收站)");
-      await appendHistory(app, newEntry("delete", path, { backup: backup || undefined }));
+      await writeChangelog(app, cfg, "删除 " + path + "(回收站)");
+      await appendHistory(app, cfg, newEntry("delete", path, { backup: backup || undefined }));
       return "已删除 " + path + "(可到系统回收站找回)";
     }
   }
 }
 
 /** 读取全部历史(最新在前) */
-export async function listHistory(app: App): Promise<HistoryEntry[]> {
+export async function listHistory(app: App, cfg: VaultConfig): Promise<HistoryEntry[]> {
   try {
-    if (!(await app.vault.adapter.exists(HISTORY_FILE))) return [];
-    const raw = await app.vault.adapter.read(HISTORY_FILE);
+    const file = historyFile(cfg);
+    if (!(await app.vault.adapter.exists(file))) return [];
+    const raw = await app.vault.adapter.read(file);
     const entries: HistoryEntry[] = [];
     for (const line of raw.split("\n")) {
       const t = line.trim();
@@ -193,20 +204,20 @@ export async function listHistory(app: App): Promise<HistoryEntry[]> {
   }
 }
 
-async function recordRollback(app: App, entry: HistoryEntry, result: string): Promise<void> {
-  await writeChangelog(app, "回滚[" + entry.id.slice(-6) + "] " + result);
-  await appendHistory(app, newEntry("rollback", entry.path, { newPath: entry.newPath, backup: entry.backup }));
+async function recordRollback(app: App, cfg: VaultConfig, entry: HistoryEntry, result: string): Promise<void> {
+  await writeChangelog(app, cfg, "回滚[" + entry.id.slice(-6) + "] " + result);
+  await appendHistory(app, cfg, newEntry("rollback", entry.path, { newPath: entry.newPath, backup: entry.backup }));
 }
 
 /** 回滚一条历史:更新=恢复备份,新建=删除,移动=移回,删除=重建 */
-export async function rollback(app: App, entry: HistoryEntry): Promise<string> {
+export async function rollback(app: App, cfg: VaultConfig, entry: HistoryEntry): Promise<string> {
   try {
     switch (entry.action) {
       case "create": {
         const f = app.vault.getAbstractFileByPath(entry.path);
         if (f instanceof TFile) {
           await app.vault.trash(f, true);
-          await recordRollback(app, entry, "删除(回滚新建) " + entry.path);
+          await recordRollback(app, cfg, entry, "删除(回滚新建) " + entry.path);
           return "已回滚:删除 " + entry.path + "(新建的文件)";
         }
         return "无需回滚:文件已不存在 " + entry.path;
@@ -217,9 +228,9 @@ export async function rollback(app: App, entry: HistoryEntry): Promise<string> {
         if (!entry.backup || !(await app.vault.adapter.exists(entry.backup))) return "备份缺失,无法回滚";
         const oldContent = await app.vault.adapter.read(entry.backup);
         const current = await app.vault.cachedRead(f);
-        await backupFile(app, entry.path, current); // 先备份当前,再覆盖
+        await backupFile(app, cfg, entry.path, current); // 先备份当前,再覆盖
         await app.vault.modify(f, oldContent);
-        await recordRollback(app, entry, "更新(回滚) " + entry.path);
+        await recordRollback(app, cfg, entry, "更新(回滚) " + entry.path);
         return "已回滚:恢复 " + entry.path + " 到 " + new Date(entry.time).toLocaleString();
       }
       case "move": {
@@ -229,7 +240,7 @@ export async function rollback(app: App, entry: HistoryEntry): Promise<string> {
         if (!(t instanceof TFile)) return "目标文件不存在:" + target;
         if (app.vault.getAbstractFileByPath(entry.path)) return "源路径已存在,无法移回:" + entry.path;
         await app.fileManager.renameFile(t, entry.path);
-        await recordRollback(app, entry, "移动(回滚) " + target + " → " + entry.path);
+        await recordRollback(app, cfg, entry, "移动(回滚) " + target + " → " + entry.path);
         return "已回滚:移回 " + target + " → " + entry.path;
       }
       case "delete": {
@@ -238,7 +249,7 @@ export async function rollback(app: App, entry: HistoryEntry): Promise<string> {
         if (app.vault.getAbstractFileByPath(entry.path)) return "文件已存在:" + entry.path;
         await ensureDir(app, dirnameOf(entry.path));
         await app.vault.create(entry.path, content);
-        await recordRollback(app, entry, "新建(回滚删除) " + entry.path);
+        await recordRollback(app, cfg, entry, "新建(回滚删除) " + entry.path);
         return "已回滚:恢复被删除的 " + entry.path;
       }
       case "rollback":
@@ -248,4 +259,12 @@ export async function rollback(app: App, entry: HistoryEntry): Promise<string> {
   } catch (e) {
     return "回滚失败:" + (e instanceof Error ? e.message : String(e));
   }
+}
+
+/** 从设置构建 VaultConfig(结构化兼容) */
+export function vaultConfigOf(settings: { writeScope?: string; allowedWriteRoots?: string[]; dataDir?: string }): VaultConfig {
+  return {
+    scope: { wholeVault: settings.writeScope !== "roots-only", allowedRoots: settings.allowedWriteRoots || [] },
+    dataDir: settings.dataDir || "AI-Workspace",
+  };
 }

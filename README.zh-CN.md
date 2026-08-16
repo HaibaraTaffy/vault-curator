@@ -15,7 +15,7 @@
 - **对话面板**:流式输出、会话管理(按创建时间编号)、模型一键切换(flash / pro / reasoner)
 - **工具调用**:`scan_vault` / `read_note` / `search_notes` / `list_files` / `rules_status`(只读)
   + `create_note` / `update_note` / `move_note` / `delete_note`(写操作)
-- **写入范围可配置**:整个仓库或仅指定目录(设置页);改动前快照到 `AI-Workspace/archive/`,记录到 `AI-Workspace/change-log/`
+- **写操作安全网**:改动前快照到 `AI-Workspace/archive/`,记录到 `AI-Workspace/change-log/`
 - **历史回滚(不依赖 git)**:命令「历史与回滚」查看每次改动 Diff 并一键回滚
 - **权限模式**:`auto`(自动执行)/ `proposal`(逐条确认)/ `normal`(只读)
 - **成本统计**:本次/会话/全部累计 token 与费用(按 DeepSeek 最新价估算)

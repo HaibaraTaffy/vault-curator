@@ -1,7 +1,7 @@
 import { App } from "obsidian";
 import type { DSVKSettings, ChatMessage, ChatUsage } from "./types";
 import { buildSystemPrompt } from "./rules";
-import { streamChat } from "./deepseek";
+import { streamChat, chatCompletion } from "./deepseek";
 import { toolsForRequest, executeTool } from "./tools";
 import type { WriteProposal } from "./writer";
 
@@ -13,6 +13,8 @@ export interface Session {
   messages: ChatMessage[];
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  /** 对话摘要(压缩旧消息后产生),注入上下文作为背景 */
+  summary?: string;
 }
 
 export interface ToolLogEntry {
@@ -74,6 +76,9 @@ export async function runAgentTurn(
   const system = rules.system + "\n\n" + persona;
 
   const historyBase = stripDisplayFields(session.messages.slice(-settings.chatHistory));
+  if (session.summary) {
+    historyBase.unshift({ role: "system", content: "【对话摘要(此前历史,供背景参考)】\n" + session.summary.slice(0, 1500) });
+  }
   if (historyBase.length && ctx) {
     historyBase[historyBase.length - 1] = { ...historyBase[historyBase.length - 1], content: ctx + "\n\n" + userText };
   }
@@ -136,8 +141,8 @@ export async function runAgentTurn(
 
   if (!finalText.trim()) {
     finalText = loopExhausted
-      ? "⚠️ 本轮工具调用次数已达上限,未生成最终回复。已执行的工具见上方记录;写操作结果可在 AI-Workspace/change-log/ 查看。"
-      : "⚠️ 本轮未生成文字回复(可能是模型输出异常)。已执行的工具见上方记录;写操作结果可在 AI-Workspace/change-log/ 查看。";
+      ? "⚠️ 本轮工具调用次数已达上限,未生成最终回复。已执行的工具见上方记录;写操作结果见变更日志(数据目录 change-log/)。"
+      : "⚠️ 本轮未生成文字回复(可能是模型输出异常)。已执行的工具见上方记录;写操作结果见变更日志(数据目录 change-log/)。";
   }
   const assistantMsg: ChatMessage = { role: "assistant", content: finalText };
   if (reasoning) assistantMsg.reasoning = reasoning.slice(0, 4000);
@@ -152,4 +157,43 @@ export async function runAgentTurn(
   session.messages.push(assistantMsg);
   session.updatedAt = Date.now();
   return { text: finalText, usage, reasoning, toolLog, pendingProposals };
+}
+
+/** 压缩会话:把旧消息(保留最近 keepRecent 条)用 DeepSeek 摘要替代;失败则保持原样 */
+export async function compressSession(
+  app: App,
+  settings: DSVKSettings,
+  session: Session,
+  opts?: { keepRecent?: number }
+): Promise<{ removed: number; summary: string; savedChars: number }> {
+  const keep = opts && opts.keepRecent ? opts.keepRecent : settings.keepRecent;
+  const split = session.messages.length - keep;
+  if (split <= 3) return { removed: 0, summary: session.summary || "", savedChars: 0 };
+
+  const oldMsgs = session.messages.slice(0, split);
+  const newMsgs = session.messages.slice(split);
+  const text = oldMsgs
+    .filter((m) => (m.content || "").trim())
+    .map((m) => (m.role === "user" ? "用户: " : "助手: ") + String(m.content || "").slice(0, 2000))
+    .join("\n\n");
+  const oldSummary = session.summary || "";
+  const promptText = (oldSummary ? "【已有摘要】\n" + oldSummary + "\n\n【新增对话】\n" : "【对话】\n") + text;
+
+  const sys =
+    "你是对话压缩器。把给定的对话内容压缩成 200-400 字的结构化中文要点,保留:用户的意图与请求、已执行的关键操作及结果(尤其是文件路径)、结论与答复要点、未完成的待办。只输出摘要,不要复述原文。";
+  try {
+    const res = await chatCompletion(settings, [
+      { role: "system", content: sys },
+      { role: "user", content: promptText },
+    ], { maxTokens: 800, temperature: 0.2 });
+    const summary = (res.content || "").trim().slice(0, 2000);
+    if (summary) {
+      session.summary = summary;
+      session.messages = newMsgs;
+      return { removed: oldMsgs.length, summary, savedChars: text.length };
+    }
+  } catch (e) {
+    // 压缩失败:保持原样
+  }
+  return { removed: 0, summary: session.summary || "", savedChars: 0 };
 }
